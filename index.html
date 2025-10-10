@@ -13,6 +13,8 @@
       }
     }
     </script>
+    <!-- Add Babel for in-browser JSX/TSX transpilation -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>FinPlan - AI Finance Manager</title>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Ccircle cx='12' cy='12' r='10' stroke='%23218C74' stroke-width='1.5' fill='none'/%3E%3Cpath d='M7 15L10 12L13 14L17 10' stroke='%23218C74' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M17 10H14' stroke='%23218C74' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M17 10V13' stroke='%23218C74' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
@@ -61,6 +63,7 @@
   </head>
   <body>
     <div id="root"></div>
-    <script type="module" src="./index.tsx"></script>
+    <!-- The type is changed to "text/babel" and data-type="module" is added -->
+    <script type="text/babel" data-type="module" src="./index.tsx"></script>
   </body>
 </html>

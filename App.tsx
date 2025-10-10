@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useLocalStorage } from './hooks/useLocalStorage.ts';
 import { View, Transaction, Goal, RecurringTransaction, User, Category, Budget, RegisteredUser } from './types.ts';
 import { GAMIFICATION_POINTS, DEFAULT_CATEGORIES } from './constants.ts';
@@ -54,7 +54,10 @@ const App: React.FC = () => {
   const [user, setUser] = useLocalStorage<User>(`${dataKeyPrefix}user`, { isPremium: false, points: 0 });
   const [budgets, setBudgets] = useLocalStorage<Budget[]>(`${dataKeyPrefix}budgets`, []);
   const [categories, setCategories] = useLocalStorage<Category[]>(`${dataKeyPrefix}categories`, DEFAULT_CATEGORIES);
+  const [lastRecurringCheck, setLastRecurringCheck] = useLocalStorage<string>(`${dataKeyPrefix}lastRecurringCheck`, new Date().toISOString());
   
+  const processedRecurringRef = useRef<string | null>(null);
+
   const currentBalance = useMemo(() => {
     return transactions.reduce((acc, tx) => acc + (tx.type === 'income' ? tx.amount : -tx.amount), 0);
   }, [transactions]);
@@ -80,6 +83,7 @@ const App: React.FC = () => {
         setRecurringTransactions(load('recurringTransactions', []));
         setUser(load('user', { isPremium: false, points: 0 }));
         setCategories(load('categories', DEFAULT_CATEGORIES)); // Always start with default categories for simplicity
+        setLastRecurringCheck(load('lastRecurringCheck', new Date().toISOString()));
     };
 
     if (currentUser) {
@@ -90,7 +94,81 @@ const App: React.FC = () => {
     } else {
         loadUserData(null); // Clear data for guest/logged-out state
     }
-  }, [currentUser, setGlobalLanguage, setTransactions, setGoals, setBudgets, setRecurringTransactions, setUser, setCategories]);
+  }, [currentUser, setGlobalLanguage, setTransactions, setGoals, setBudgets, setRecurringTransactions, setUser, setCategories, setLastRecurringCheck]);
+
+  // Effect to process recurring transactions
+  useEffect(() => {
+    if (!currentUser || processedRecurringRef.current === currentUser.id) {
+      return;
+    }
+
+    const processRecurring = () => {
+      const now = new Date();
+      const lastCheckDate = new Date(lastRecurringCheck);
+      const newTransactions: Omit<Transaction, 'id'>[] = [];
+
+      recurringTransactions.forEach(rtx => {
+        if (!rtx.isActive) return;
+
+        const startDate = new Date(rtx.startDate);
+        let nextDueDate = new Date(startDate.getUTCFullYear(), startDate.getUTCMonth(), startDate.getUTCDate());
+        
+        const rtxEndDate = rtx.endDate ? new Date(rtx.endDate) : null;
+        if (rtxEndDate) {
+            rtxEndDate.setUTCHours(23, 59, 59, 999);
+        }
+
+        while (nextDueDate < lastCheckDate) {
+          switch (rtx.frequency) {
+            case 'daily': nextDueDate.setUTCDate(nextDueDate.getUTCDate() + 1); break;
+            case 'weekly': nextDueDate.setUTCDate(nextDueDate.getUTCDate() + 7); break;
+            case 'monthly': nextDueDate.setUTCMonth(nextDueDate.getUTCMonth() + 1); break;
+            case 'yearly': nextDueDate.setUTCFullYear(nextDueDate.getUTCFullYear() + 1); break;
+          }
+        }
+
+        while (nextDueDate <= now) {
+          if (rtxEndDate && nextDueDate > rtxEndDate) {
+            break;
+          }
+
+          const dateString = formatDate(nextDueDate);
+          const alreadyExists = transactions.some(t => t.recurringId === rtx.id && t.date === dateString);
+
+          if (!alreadyExists) {
+            newTransactions.push({
+              description: rtx.description,
+              amount: rtx.amount,
+              type: rtx.type,
+              category: rtx.category,
+              date: dateString,
+              recurringId: rtx.id,
+            });
+          }
+
+          switch (rtx.frequency) {
+            case 'daily': nextDueDate.setUTCDate(nextDueDate.getUTCDate() + 1); break;
+            case 'weekly': nextDueDate.setUTCDate(nextDueDate.getUTCDate() + 7); break;
+            case 'monthly': nextDueDate.setUTCMonth(nextDueDate.getUTCMonth() + 1); break;
+            case 'yearly': nextDueDate.setUTCFullYear(nextDueDate.getUTCFullYear() + 1); break;
+          }
+        }
+      });
+
+      if (newTransactions.length > 0) {
+        const transactionsToAdd = newTransactions.map((tx, index) => ({ ...tx, id: `tx_recur_${Date.now()}_${index}` }));
+        setTransactions(prev => [...prev, ...transactionsToAdd]);
+      }
+
+      setLastRecurringCheck(now.toISOString());
+      processedRecurringRef.current = currentUser.id;
+    };
+
+    // A short delay to ensure state is settled after login
+    const timer = setTimeout(processRecurring, 100);
+    return () => clearTimeout(timer);
+    
+  }, [currentUser, recurringTransactions, transactions, lastRecurringCheck, setTransactions, setLastRecurringCheck]);
 
 
   // --- GAMIFICATION ---
@@ -101,7 +179,6 @@ const App: React.FC = () => {
 
   // --- TRANSACTIONS ---
   const addTransaction = (tx: Omit<Transaction, 'id'>): string | void => {
-      // FIX: Check for income transactions before validating balance for an expense.
       const hasIncome = transactions.some(t => t.type === 'income');
       
       if (!hasIncome && tx.type === 'expense') {
@@ -144,7 +221,6 @@ const App: React.FC = () => {
         return t('errors.insufficientBalance');
       }
 
-      // 1. Add an expense transaction for tracking
       const goal = goals.find(g => g.id === goalId);
       if (!goal) return;
 
@@ -156,7 +232,6 @@ const App: React.FC = () => {
           date: formatDate(new Date()),
       });
       
-      // 2. Update the goal's saved amount
       setGoals(prevGoals => prevGoals.map(g => {
           if (g.id === goalId) {
               const newSavedAmount = g.savedAmount + amount;
@@ -197,19 +272,13 @@ const App: React.FC = () => {
     }
   };
   const updateCategory = (oldCategory: string, newCategory: string) => {
-    // Update category name
     setCategories(prev => prev.map(c => c === oldCategory ? newCategory : c));
-    // Update associated transactions
     setTransactions(prev => prev.map(tx => tx.category === oldCategory ? { ...tx, category: newCategory } : tx));
-    // Update associated recurring transactions
-    // FIX: Corrected variable name from `tx` to `rtx` to avoid a reference error.
     setRecurringTransactions(prev => prev.map(rtx => rtx.category === oldCategory ? { ...rtx, category: newCategory } : rtx));
-    // Update associated budgets
     setBudgets(prev => prev.map(b => b.category === oldCategory ? { ...b, category: newCategory } : b));
   };
   const deleteCategory = (category: string) => {
     setCategories(prev => prev.filter(c => c !== category));
-    // Re-categorize associated transactions to 'Other'
     setTransactions(prev => prev.map(tx => tx.category === category ? { ...tx, category: 'Other' } : tx));
     setRecurringTransactions(prev => prev.map(rtx => rtx.category === category ? { ...rtx, category: 'Other' } : rtx));
     setBudgets(prev => prev.filter(b => b.category !== category));
@@ -238,13 +307,13 @@ const App: React.FC = () => {
         profilePictureUrl: `https://api.dicebear.com/8.x/adventurer/svg?seed=${encodeURIComponent(newUser.name)}`,
       };
       setRegisteredUsers(prev => [...prev, newRegisteredUser]);
-      // The user will be prompted to select a language after their first login.
       return true;
   };
 
   const handleLogout = () => {
+    processedRecurringRef.current = null;
     setCurrentUser(null);
-    setView(View.Dashboard); // Reset to dashboard view
+    setView(View.Dashboard);
     setAuthView('login');
   };
 
