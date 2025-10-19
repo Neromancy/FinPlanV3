@@ -20,7 +20,7 @@ export const categorizeTransaction = async (description: string, categories: str
     const prompt = `Analyze the transaction description "${description}" and categorize it into one of the following valid categories: ${categories.join(', ')}. Also, provide a confidence score between 0.0 and 1.0 for your categorization.`;
 
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
+      model: 'models/gemini-2.5-flash',
       contents: prompt,
       config: {
         responseMimeType: "application/json",
